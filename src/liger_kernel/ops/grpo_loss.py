@@ -122,7 +122,7 @@ def _grpo_loss_fwd_kernel(
         OLD_LOGP += off_b * L + off_l
         old_logp = tl.load(OLD_LOGP).to(tl.float32)
     coef_1 = tl.exp(logp - old_logp)
-    coef_2 = tl.clamp(coef_1, 0.0, CLIP_RATIO)
+    coef_2 = tl.minimum(coef_1, CLIP_RATIO)
     advantage = tl.load(ADVANTAGES).to(tl.float32)
     per_token_loss = -coef_2 * advantage
     is_clipped = coef_1 > CLIP_RATIO
@@ -196,7 +196,7 @@ def _grpo_loss_bwd_kernel(
         OLD_LOGP += off_b * L + off_l
         old_logp = tl.load(OLD_LOGP).to(tl.float32)
     coef_1 = tl.exp(logp - old_logp)
-    coef_2 = tl.clamp(coef_1, 0.0, CLIP_RATIO)
+    coef_2 = tl.minimum(coef_1, CLIP_RATIO)
     advantage = tl.load(ADVANTAGES).to(tl.float32)
     mask = coef_1 <= CLIP_RATIO
 
