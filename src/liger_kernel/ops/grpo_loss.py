@@ -81,8 +81,7 @@ def _grpo_loss_fwd_kernel(
     IS_CLIPPED,
     TEMPERATURE,
     BETA: tl.constexpr,
-    EPS_LOW,
-    EPS_HIGH,
+    CLIP_RATIO,
     L: tl.constexpr,
     N: tl.constexpr,
     BLOCK_N: tl.constexpr = 4096,
@@ -123,12 +122,10 @@ def _grpo_loss_fwd_kernel(
         OLD_LOGP += off_b * L + off_l
         old_logp = tl.load(OLD_LOGP).to(tl.float32)
     coef_1 = tl.exp(logp - old_logp)
-    coef_2 = tl.clamp(coef_1, 1 - EPS_LOW, 1 + EPS_HIGH)
+    coef_2 = tl.clamp(coef_1, 0.0, CLIP_RATIO)
     advantage = tl.load(ADVANTAGES).to(tl.float32)
-    per_token_loss1 = coef_1 * advantage
-    per_token_loss2 = coef_2 * advantage
-    per_token_loss = -tl.minimum(per_token_loss1, per_token_loss2)
-    is_clipped = per_token_loss1 < per_token_loss2
+    per_token_loss = -coef_2 * advantage
+    is_clipped = coef_1 > CLIP_RATIO
 
     if BETA != 0.0:
         REF_LOGP += off_b * L + off_l
@@ -161,8 +158,7 @@ def _grpo_loss_bwd_kernel(
     LSE,
     TEMPERATURE,
     BETA: tl.constexpr,
-    EPS_LOW,
-    EPS_HIGH,
+    CLIP_RATIO,
     loss_stride0,
     loss_stride1,
     L: tl.constexpr,
@@ -200,13 +196,11 @@ def _grpo_loss_bwd_kernel(
         OLD_LOGP += off_b * L + off_l
         old_logp = tl.load(OLD_LOGP).to(tl.float32)
     coef_1 = tl.exp(logp - old_logp)
-    coef_2 = tl.clamp(coef_1, 1 - EPS_LOW, 1 + EPS_HIGH)
+    coef_2 = tl.clamp(coef_1, 0.0, CLIP_RATIO)
     advantage = tl.load(ADVANTAGES).to(tl.float32)
-    per_token_loss1 = coef_1 * advantage
-    per_token_loss2 = coef_2 * advantage
-    mask = per_token_loss2 >= per_token_loss1
+    mask = coef_1 <= CLIP_RATIO
 
-    dlogp = -per_token_loss1 * mask
+    dlogp = -coef_2 * advantage * mask
     if BETA != 0.0:
         REF_LOGP += off_b * L + off_l
         ref_logp = tl.load(REF_LOGP).to(tl.float32)
@@ -234,8 +228,7 @@ class GrpoLossFunction(torch.autograd.Function):
         completion_mask,
         temperature,
         beta,
-        eps_low,
-        eps_high,
+        clip_ratio,
         inplace,
     ):
         assert logits.is_contiguous() and completion_ids.is_contiguous()
@@ -266,14 +259,13 @@ class GrpoLossFunction(torch.autograd.Function):
             is_clipped,
             temperature,
             beta,
-            eps_low,
-            eps_high,
+            clip_ratio,
             L,
             N,
             **kwargs,
         )
         ctx.save_for_backward(logits, old_logp, ref_logp, completion_ids, advantages, completion_mask, lse)
-        ctx.infos = (temperature, beta, eps_low, eps_high, inplace)
+        ctx.infos = (temperature, beta, clip_ratio, inplace)
         # return loss
         return loss, kl, is_clipped
 
@@ -282,7 +274,7 @@ class GrpoLossFunction(torch.autograd.Function):
         dloss = args[0]
         # print(dloss.shape)
         logits, old_logp, ref_logp, completion_ids, advantages, completion_mask, lse = ctx.saved_tensors
-        temperature, beta, eps_low, eps_high, inplace = ctx.infos
+        temperature, beta, clip_ratio, inplace = ctx.infos
         B, L_ADD_1, N = logits.shape
         L = L_ADD_1 - 1
         dlogits = logits.data if inplace else torch.empty_like(logits)
@@ -299,8 +291,7 @@ class GrpoLossFunction(torch.autograd.Function):
             lse,
             temperature,
             beta,
-            eps_low,
-            eps_high,
+            clip_ratio,
             *dloss.stride(),
             L,
             N,

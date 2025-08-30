@@ -10,8 +10,7 @@ def triton_grpo_loss(
     completion_mask=None,
     temperature=0.9,
     beta=0.04,
-    eps_low=0.2,
-    eps_high=0.4,
+    clip_ratio=8.0,
     inplace=True,
 ):
     assert logits is not None and completion_ids is not None and advantages is not None, (
@@ -27,8 +26,7 @@ def triton_grpo_loss(
         completion_mask,
         temperature,
         beta,
-        eps_low,
-        eps_high,
+        clip_ratio,
         inplace,
     )
 
