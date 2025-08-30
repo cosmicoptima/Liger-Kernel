@@ -18,7 +18,7 @@ def _selective_log_softmax_kernel(
     off_b = tl.program_id(0).cast(tl.int64)
     off_l = tl.program_id(1).cast(tl.int64)
 
-    LOGITS += off_b * (L + 1) * N + off_l * N
+    LOGITS += off_b * L * N + off_l * N
     INPUT_IDS += off_b * stride_input_ids_b + off_l
     LOG_P += off_b * L + off_l
 
@@ -95,7 +95,7 @@ def _grpo_loss_fwd_kernel(
         if not_skip == 0:
             return
 
-    LOGITS += off_b * (L + 1) * N + off_l * N
+    LOGITS += off_b * L * N + off_l * N
     INPUT_IDS += off_b * L + off_l
     ADVANTAGES += off_b
     LOSS += off_b * L + off_l
@@ -178,7 +178,7 @@ def _grpo_loss_bwd_kernel(
                 tl.store(DLOGITS + cols, 0.0, mask=cols < N)
             return
 
-    LOGITS += off_b * (L + 1) * N + off_l * N
+    LOGITS += off_b * L * N + off_l * N
     DLOSS += off_b * loss_stride0 + off_l * loss_stride1
     INPUT_IDS += off_b * L + off_l
     ADVANTAGES += off_b
@@ -235,8 +235,7 @@ class GrpoLossFunction(torch.autograd.Function):
         assert old_logp is None or old_logp.is_contiguous()
         assert (ref_logp is not None and ref_logp.is_contiguous()) if beta != 0.0 else True
 
-        B, L_ADD_1, N = logits.shape
-        L = L_ADD_1 - 1
+        B, L, N = logits.shape  # Now expects shifted logits of shape [B, L, N]
 
         if completion_mask is not None:
             assert completion_mask.is_contiguous()
@@ -275,8 +274,7 @@ class GrpoLossFunction(torch.autograd.Function):
         # print(dloss.shape)
         logits, old_logp, ref_logp, completion_ids, advantages, completion_mask, lse = ctx.saved_tensors
         temperature, beta, clip_ratio, inplace = ctx.infos
-        B, L_ADD_1, N = logits.shape
-        L = L_ADD_1 - 1
+        B, L, N = logits.shape  # Now expects shifted logits of shape [B, L, N]
         dlogits = logits.data if inplace else torch.empty_like(logits)
         kwargs = {"BLOCK_N": 4096, "num_stages": 1, "num_warps": 16}
         _grpo_loss_bwd_kernel[(B, L)](
